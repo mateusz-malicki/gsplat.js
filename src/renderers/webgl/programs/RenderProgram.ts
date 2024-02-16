@@ -31,6 +31,10 @@ out float vSize;
 out float vSelected;
 
 void main () {
+    if (index < 0)
+    {
+        return;
+    }
     uvec4 cen = texelFetch(u_texture, ivec2((uint(index) & 0x3ffu) << 1, uint(index) >> 10), 0);
     float selected = float((cen.w >> 24) & 0xffu);
 
@@ -147,6 +151,11 @@ class RenderProgram extends ShaderProgram {
     private _chunks: Uint8Array | null = null;
     private _splatTexture: WebGLTexture | null = null;
 
+    private _postDataToSorter: boolean = false;
+    private _waitingForSorter: boolean = false;
+    private _sorterHasAnyData: boolean = false;
+    private _drawCount: number = 0;
+
     protected _initialize: () => void;
     protected _resize: () => void;
     protected _render: () => void;
@@ -195,16 +204,23 @@ class RenderProgram extends ShaderProgram {
             u_viewport = gl.getUniformLocation(this.program, "viewport") as WebGLUniformLocation;
             gl.uniform2fv(u_viewport, new Float32Array([canvas.width, canvas.height]));
         };
-
+        let firstBufferWrite = true;
         const createWorker = () => {
             worker = new SortWorker();
             worker.onmessage = (e) => {
                 if (e.data.depthIndex) {
-                    const { depthIndex, chunks } = e.data;
+                    const { depthIndex, chunks, count } = e.data;
                     this._depthIndex = depthIndex;
                     this._chunks = chunks;
-                    gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
-                    gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.STATIC_DRAW);
+                    //gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
+                    if (firstBufferWrite) {
+                        gl.bufferData(gl.ARRAY_BUFFER, depthIndex, gl.DYNAMIC_DRAW);
+                        firstBufferWrite = false;
+                    } else {
+                        gl.bufferSubData(gl.ARRAY_BUFFER, 0, depthIndex);
+                    }
+                    this._waitingForSorter = false;
+                    this._drawCount = count;
                 }
             };
         };
@@ -253,7 +269,7 @@ class RenderProgram extends ShaderProgram {
 
             vertexBuffer = gl.createBuffer() as WebGLBuffer;
             gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]), gl.STATIC_DRAW);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]), gl.DYNAMIC_DRAW);
 
             positionAttribute = gl.getAttribLocation(this.program, "position");
             gl.enableVertexAttribArray(positionAttribute);
@@ -263,6 +279,16 @@ class RenderProgram extends ShaderProgram {
             indexAttribute = gl.getAttribLocation(this.program, "index");
             gl.enableVertexAttribArray(indexAttribute);
             gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
+
+            //
+            gl.clearColor(0, 0, 0, 0);
+            gl.disable(gl.DEPTH_TEST);
+            gl.enable(gl.BLEND);
+            gl.blendFuncSeparate(gl.ONE_MINUS_DST_ALPHA, gl.ONE, gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+            gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
+
+            gl.vertexAttribIPointer(indexAttribute, 1, gl.INT, 0, 0);
+            gl.vertexAttribDivisor(indexAttribute, 1);
 
             createWorker();
         };
@@ -364,49 +390,82 @@ class RenderProgram extends ShaderProgram {
                     );
                 }
 
-                const detachedPositions = new Float32Array(this.renderData.positions.slice().buffer);
-                const detachedTransforms = new Float32Array(this.renderData.transforms.slice().buffer);
-                const detachedTransformIndices = new Uint32Array(this.renderData.transformIndices.slice().buffer);
-                worker.postMessage(
-                    {
-                        sortData: {
-                            positions: detachedPositions,
-                            transforms: detachedTransforms,
-                            transformIndices: detachedTransformIndices,
-                            vertexCount: this.renderData.vertexCount,
-                        },
-                    },
-                    [detachedPositions.buffer, detachedTransforms.buffer, detachedTransformIndices.buffer],
-                );
+                //const detachedPositions = new Float32Array(this.renderData.positions.slice().buffer);
+                //const detachedTransforms = new Float32Array(this.renderData.transforms.slice().buffer);
+                //const detachedTransformIndices = new Uint32Array(this.renderData.transformIndices.slice().buffer);
+                this._postDataToSorter = true;
+                // worker.postMessage(
+                //     {
+                //         sortData: {
+                //             positions: detachedPositions,
+                //             transforms: detachedTransforms,
+                //             transformIndices: detachedTransformIndices,
+                //             vertexCount: this.renderData.vertexCount,
+                //         },
+                //     },
+                //     [detachedPositions.buffer, detachedTransforms.buffer, detachedTransformIndices.buffer],
+                // );
 
                 this.renderData.dataChanged = false;
                 this.renderData.transformsChanged = false;
             }
 
             this._camera.update();
-            worker.postMessage({ viewProj: this._camera.data.viewProj.buffer });
+            if (!this._waitingForSorter) {
+                const sortMessage = {
+                    message: {
+                        viewProj: this._camera.data.viewProj.buffer
+                    },
+                    transfer: []
+                } as any;
+                if (this._postDataToSorter) {
+                    this._postDataToSorter = false;
+    
+                    const detachedPositions = new Float32Array(this.renderData.positions);
+                    const detachedTransforms = new Float32Array(this.renderData.transforms);
+                    const detachedTransformIndices = new Uint32Array(this.renderData.transformIndices);
+    
+                    sortMessage.transfer = [...sortMessage.transfer, detachedPositions.buffer, detachedTransforms.buffer, detachedTransformIndices.buffer];
+    
+                    sortMessage.message.sortData = {
+                        positions: detachedPositions,
+                        transforms: detachedTransforms,
+                        transformIndices: detachedTransformIndices,
+                        vertexCount: this.renderData.vertexCount,
+                    }
+                    this._sorterHasAnyData = true;
+                }
+                if (this._sorterHasAnyData || sortMessage.message.sortData) {
+                    worker.postMessage(sortMessage.message, sortMessage.transfer);
+                    this._waitingForSorter = true;
+                }
+            }
+            
 
             gl.viewport(0, 0, canvas.width, canvas.height);
-            gl.clearColor(0, 0, 0, 0);
+            //gl.clearColor(0, 0, 0, 0);
             gl.clear(gl.COLOR_BUFFER_BIT);
 
-            gl.disable(gl.DEPTH_TEST);
-            gl.enable(gl.BLEND);
-            gl.blendFuncSeparate(gl.ONE_MINUS_DST_ALPHA, gl.ONE, gl.ONE_MINUS_DST_ALPHA, gl.ONE);
-            gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
+            //gl.disable(gl.DEPTH_TEST);
+            //gl.enable(gl.BLEND);
+            //gl.blendFuncSeparate(gl.ONE_MINUS_DST_ALPHA, gl.ONE, gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+            //gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD);
 
             gl.uniformMatrix4fv(u_projection, false, this._camera.data.projectionMatrix.buffer);
             gl.uniformMatrix4fv(u_view, false, this._camera.data.viewMatrix.buffer);
 
-            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-            gl.vertexAttribPointer(positionAttribute, 2, gl.FLOAT, false, 0, 0);
+            //gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            //gl.vertexAttribPointer(positionAttribute, 2, gl.FLOAT, false, 0, 0);
 
-            gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, this.depthIndex, gl.STATIC_DRAW);
-            gl.vertexAttribIPointer(indexAttribute, 1, gl.INT, 0, 0);
-            gl.vertexAttribDivisor(indexAttribute, 1);
+            //gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
+            //gl.bufferData(gl.ARRAY_BUFFER, this.depthIndex, gl.STATIC_DRAW);
+            //gl.vertexAttribIPointer(indexAttribute, 1, gl.INT, 0, 0);
+            //gl.vertexAttribDivisor(indexAttribute, 1);
 
-            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, this.renderData.vertexCount);
+            if (this._drawCount > 0) {
+                gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, this._drawCount);
+            }
+            
         };
 
         this._dispose = () => {
