@@ -114,6 +114,47 @@ class Quaternion {
         return new Vector3(x, y, z);
     }
 
+    static slerp(a: Quaternion, b: Quaternion, t: number): Quaternion {
+        //let [ax, ay, az, aw] = a;
+        //let [bx, by, bz, bw] = b;
+
+        a = a.normalize();
+        b = b.normalize();
+        // Calculate angle between them.
+        let cosHalfTheta = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+    
+        // if a=b or a=-b then theta = 0 and we can return a
+        if (Math.abs(cosHalfTheta) >= 1.0) {
+            //return a;
+        }
+    
+        // Calculate temporary values.
+        let halfTheta = Math.acos(cosHalfTheta);
+        let sinHalfTheta = Math.sqrt(1.0 - cosHalfTheta * cosHalfTheta);
+    
+        // If theta = 180 degrees then result is not fully defined
+        // we could rotate around any axis normal to a or b
+        if (Math.abs(sinHalfTheta) < 0.001) {
+            return new Quaternion(
+                (a.x * 0.5 * t + b.x * 0.5 * t),
+                (a.y * 0.5 * t + b.y * 0.5 * t),
+                (a.z * 0.5 * t + b.z * 0.5 * t),
+                (a.w * 0.5 * t + b.w * 0.5 * t),
+            );
+        }
+    
+        let ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+        let ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+    
+        // Calculate Quaternion.
+        return new Quaternion(
+            (a.x * ratioA + b.x * ratioB),
+            (a.y * ratioA + b.y * ratioB),
+            (a.z * ratioA + b.z * ratioB),
+            (a.w * ratioA + b.w * ratioB),
+        );
+    }
+
     static FromMatrix3(matrix: Matrix3): Quaternion {
         const m = matrix.buffer;
         const trace = m[0] + m[4] + m[8];

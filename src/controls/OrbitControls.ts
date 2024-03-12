@@ -4,14 +4,18 @@ import { Quaternion } from "../math/Quaternion";
 import { Vector3 } from "../math/Vector3";
 
 class OrbitControls {
+    lastUpdate: number = Date.now();
     minAngle: number = -90;
     maxAngle: number = 90;
     minZoom: number = 0.1;
     maxZoom: number = 30;
-    orbitSpeed: number = 1;
+    orbitSpeed: number = 2;//1;
     panSpeed: number = 1;
-    zoomSpeed: number = 1;
-    dampening: number = 0.12;
+    zoomSpeed: number = 0.5;
+    moveSpeed: number = 0.025;
+    rotateSpeed: number = 0.1;
+    dampening: number = 0.25;
+    autoRotateAlpha: number = 0;
     setCameraTarget: (newTarget: Vector3) => void = () => {};
     update: () => void;
     dispose: () => void;
@@ -216,16 +220,31 @@ class OrbitControls {
         };
 
         const lerp = (a: number, b: number, t: number) => {
+            
             return (1 - t) * a + t * b;
         };
 
         this.update = () => {
             isUpdatingCamera = true;
 
-            alpha = lerp(alpha, desiredAlpha, this.dampening);
-            beta = lerp(beta, desiredBeta, this.dampening);
-            radius = lerp(radius, desiredRadius, this.dampening);
-            target = target.lerp(desiredTarget, this.dampening);
+            const now = Date.now();
+            const diff = now - this.lastUpdate;
+            const multiplier = diff / 30.0;
+            //const multiplier = 20.0 / 30.0;
+
+            if (this.autoRotateAlpha == 0) {
+                alpha = lerp(alpha, desiredAlpha, this.dampening);
+                beta = lerp(beta, desiredBeta, this.dampening);
+                radius = lerp(radius, desiredRadius, this.dampening);
+                target = target.lerp(desiredTarget, this.dampening);
+            } else {
+                alpha = desiredAlpha;
+                beta = lerp(beta, desiredBeta, this.dampening);
+                radius = lerp(radius, desiredRadius, this.dampening);
+                target = target.lerp(desiredTarget, this.dampening);
+            }
+            
+            
 
             const x = target.x + radius * Math.sin(alpha) * Math.cos(beta);
             const y = target.y - radius * Math.sin(beta);
@@ -237,27 +256,33 @@ class OrbitControls {
             const ry = Math.atan2(direction.x, direction.z);
             camera.rotation = Quaternion.FromEuler(new Vector3(rx, ry, 0));
 
-            const moveSpeed = 0.025;
-            const rotateSpeed = 0.01;
+            
 
             const R = Matrix3.RotationFromQuaternion(camera.rotation).buffer;
             const forward = new Vector3(-R[2], -R[5], -R[8]);
             const right = new Vector3(R[0], R[3], R[6]);
 
-            if (keys["KeyS"]) desiredTarget = desiredTarget.add(forward.multiply(moveSpeed));
-            if (keys["KeyW"]) desiredTarget = desiredTarget.subtract(forward.multiply(moveSpeed));
-            if (keys["KeyA"]) desiredTarget = desiredTarget.subtract(right.multiply(moveSpeed));
-            if (keys["KeyD"]) desiredTarget = desiredTarget.add(right.multiply(moveSpeed));
+            if (keys["KeyS"]) desiredTarget = desiredTarget.add(forward.multiply(this.moveSpeed * multiplier));
+            if (keys["KeyW"]) desiredTarget = desiredTarget.subtract(forward.multiply(this.moveSpeed * multiplier));
+            if (keys["KeyA"]) desiredTarget = desiredTarget.subtract(right.multiply(this.moveSpeed * multiplier));
+            if (keys["KeyD"]) desiredTarget = desiredTarget.add(right.multiply(this.moveSpeed * multiplier));
 
             // Add rotation with 'e' and 'q' for horizontal rotation
-            if (keys["KeyE"]) desiredAlpha += rotateSpeed;
-            if (keys["KeyQ"]) desiredAlpha -= rotateSpeed;
+            if (this.autoRotateAlpha == 0)
+            {
+                if (keys["KeyE"]) desiredAlpha += this.rotateSpeed * multiplier;
+                if (keys["KeyQ"]) desiredAlpha -= this.rotateSpeed * multiplier;
+            } else {
+                desiredAlpha += this.autoRotateAlpha * multiplier;
+            }
+            
 
             // Add rotation with 'r' and 'f' for vertical rotation
-            if (keys["KeyR"]) desiredBeta += rotateSpeed;
-            if (keys["KeyF"]) desiredBeta -= rotateSpeed;
+            if (keys["KeyR"]) desiredBeta += this.rotateSpeed * multiplier;
+            if (keys["KeyF"]) desiredBeta -= this.rotateSpeed * multiplier;
 
             isUpdatingCamera = false;
+            this.lastUpdate = now;
         };
 
         const preventDefault = (e: Event) => {

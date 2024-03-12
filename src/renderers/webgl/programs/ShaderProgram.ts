@@ -1,6 +1,6 @@
 import { Camera } from "../../../cameras/Camera";
 import { Scene } from "../../../core/Scene";
-import { WebGLRenderer } from "../../WebGLRenderer";
+import { CameraData, WebGLRenderer } from "../../WebGLRenderer";
 import { ShaderPass } from "../passes/ShaderPass";
 
 abstract class ShaderProgram {
@@ -13,14 +13,14 @@ abstract class ShaderProgram {
     protected _started: boolean = false;
     protected _initialized: boolean = false;
 
-    protected abstract _initialize: () => void;
-    protected abstract _resize: () => void;
-    protected abstract _render: () => void;
+    protected abstract _initialize: (cameraData: CameraData) => void;
+    protected abstract _resize: (projectionMatrix: number[]) => void;
+    protected abstract _render: (cameraData: CameraData) => void;
     protected abstract _dispose: () => void;
 
-    initialize: () => void;
-    resize: () => void;
-    render: (scene: Scene, camera: Camera) => void;
+    initialize: (cameraData: CameraData) => void;
+    resize: (projectionMatrix: number[]) => void;
+    render: (scene: Scene, cameraData: CameraData) => void;
     dispose: () => void;
 
     constructor(renderer: WebGLRenderer, passes: ShaderPass[]) {
@@ -51,18 +51,18 @@ abstract class ShaderProgram {
             console.error(gl.getProgramInfoLog(this.program));
         }
 
-        this.resize = () => {
+        this.resize = (projectionMatrix: number[]) => {
             gl.useProgram(this._program);
 
-            this._resize();
+            this._resize(projectionMatrix);
         };
 
-        this.initialize = () => {
+        this.initialize = (cameraData: CameraData) => {
             console.assert(!this._initialized, "ShaderProgram already initialized");
 
             gl.useProgram(this._program);
 
-            this._initialize();
+            this._initialize(cameraData);
             for (const pass of this.passes) {
                 pass.initialize(this);
             }
@@ -71,21 +71,21 @@ abstract class ShaderProgram {
             this._started = true;
         };
 
-        this.render = (scene: Scene, camera: Camera) => {
+        this.render = (scene: Scene, cameraData: CameraData) => {
             gl.useProgram(this._program);
 
-            if (this._scene !== scene || this._camera !== camera) {
+            if (this._scene !== scene /*|| this._camera !== camera*/) {
                 this.dispose();
                 this._scene = scene;
-                this._camera = camera;
-                this.initialize();
+                //this._camera = camera;
+                this.initialize(cameraData);
             }
 
             for (const pass of this.passes) {
                 pass.render();
             }
 
-            this._render();
+            this._render(cameraData);
         };
 
         this.dispose = () => {

@@ -12,6 +12,9 @@ class CameraData {
     private _width: number = 512;
     private _height: number = 512;
 
+    private _rotation: Quaternion = new Quaternion();
+    private _position: Vector3 = new Vector3();
+
     private _projectionMatrix: Matrix4 = new Matrix4();
     private _viewMatrix: Matrix4 = new Matrix4();
     private _viewProj: Matrix4 = new Matrix4();
@@ -20,6 +23,35 @@ class CameraData {
     setSize: (width: number, height: number) => void;
 
     private _updateProjectionMatrix: () => void;
+
+    predict (prevPosition: Vector3, prevRotation: Quaternion, n: number)  {
+        const _t = -1.0 + 0.5 * n;
+        console.log('slerp2: ' + _t);
+        const rot = Quaternion.slerp(prevRotation, this._rotation, _t);//.normalize();
+        const R = Matrix3.RotationFromQuaternion(rot).buffer;
+        //const R = Matrix3.RotationFromQuaternion(this._rotation).buffer;
+        const t1 = this._position.flat();
+        const t2 = prevPosition.flat();
+
+        const t = t1;//new Array<number>(t1.length);
+
+        for(let i = 0; i < t.length; i++) {
+            t[i] = (t1[i] - _t * (t2[i] - t1[i]));
+        }
+
+        // prettier-ignore
+        const _viewMatrix = new Matrix4(
+            R[0], R[1], R[2], 0,
+            R[3], R[4], R[5], 0,
+            R[6], R[7], R[8], 0,
+            -t[0] * R[0] - t[1] * R[3] - t[2] * R[6],
+            -t[0] * R[1] - t[1] * R[4] - t[2] * R[7],
+            -t[0] * R[2] - t[1] * R[5] - t[2] * R[8],
+            1,
+        );
+
+        return this.projectionMatrix.multiply(_viewMatrix);
+    };
 
     constructor() {
         this._updateProjectionMatrix = () => {
@@ -37,6 +69,9 @@ class CameraData {
         this.update = (position: Vector3, rotation: Quaternion) => {
             const R = Matrix3.RotationFromQuaternion(rotation).buffer;
             const t = position.flat();
+
+            this._rotation = rotation;
+            this._position = position;
 
             // prettier-ignore
             this._viewMatrix = new Matrix4(
@@ -121,6 +156,13 @@ class CameraData {
 
     get viewProj() {
         return this._viewProj;
+    }
+
+    get position() {
+        return this._position;
+    }
+    get rotation() {
+        return this._rotation;
     }
 }
 
